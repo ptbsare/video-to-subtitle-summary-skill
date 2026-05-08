@@ -24,6 +24,7 @@ __pycache__/
 # sherpa-onnx 源码仓库（太大）
 sherpa-onnx/
 
-# 模型目录（大文件，已解压但不入库）
+# 日志文件
+*.log
+logs/
 sherpa-onnx-paraformer-*/
-__pycache__/

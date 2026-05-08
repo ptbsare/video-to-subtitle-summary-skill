@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import shutil
@@ -316,6 +317,22 @@ def transcribe_volcengine(audio_path: Path, output_dir: Path, env_map: dict) -> 
 # ── 主流程 ────────────────────────────────────────────────────────────
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # 日志配置
+    _log_dir = Path("/tmp/video_analysis")
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _log_file = _log_dir / f"video_to_summary_{time.strftime('%Y%m%d_%H%M%S')}.log"
+    _logger = logging.getLogger("video_to_summary")
+    _logger.setLevel(logging.DEBUG)
+    _logger.handlers.clear()
+    _h_term = logging.StreamHandler(sys.stdout)
+    _h_term.setLevel(logging.INFO)
+    _h_term.setFormatter(logging.Formatter("%(message)s"))
+    _logger.addHandler(_h_term)
+    _h_file = logging.FileHandler(_log_file, encoding="utf-8")
+    _h_file.setLevel(logging.DEBUG)
+    _h_file.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    _logger.addHandler(_h_file)
+
     parser = argparse.ArgumentParser(
         description="一键视频转字幕 + AI 总结",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -323,6 +340,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("input", help="视频URL或本地文件路径")
     parser.add_argument("--output-dir", default=None, help="输出目录 (默认: /tmp/video_analysis/<id>)")
     args = parser.parse_args(argv)
+
+    _logger.info(f"日志文件: {_log_file}")
 
     # 加载环境变量
     env_map = load_env()

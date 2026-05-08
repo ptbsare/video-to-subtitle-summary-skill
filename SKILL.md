@@ -40,58 +40,54 @@ python3 .../video_to_summary.py /path/to/audio.mp3
 - `text.txt` — 纯文本
 - `result.json` — 完整结果 (含 text, video_info, segments, 文件路径)
 
+### 日志
+
+运行日志自动缓存到 `/tmp/video_analysis/` 目录。
+
 ## 支持平台
 
-| 平台 | URL 特征 | 下载方式 | 字幕来源 |
-|------|----------|----------|----------|
-| 抖音/TikTok | `douyin.com`, `tiktok.com` | TikHub API | ASR |
-| 小红书 | `xiaohongshu.com`, `xhslink.com` | TikHub API | ASR |
-| B站 | `bilibili.com`, `b23.tv` | yt-dlp | ASR |
-| YouTube | `youtube.com`, `youtu.be` | yt-dlp 抓字幕优先 | 字幕 → ASR 回退 |
-| 本地视频 | `.mp4`, `.mov`, `.avi`, `.mkv` 等 | 直接读取 | ASR |
-| 本地音频 | `.mp3`, `.wav`, `.m4a`, `.flac` 等 | 直接读取 | ASR |
+**明确支持（有专门解析逻辑）：**
+- 抖音/TikTok (`douyin.com` / `tiktok.com`)
+- 小红书 (`xiaohongshu.com` / `xhslink.com`)
+- B站 (`bilibili.com` / `b23.tv`)
+- YouTube (`youtube.com` / `youtu.be`)
+
+**通用支持（yt-dlp 兼容，自动回退）：**
+- 微博、知乎、快手、西瓜视频等 **200+ 平台**
+- 任何 yt-dlp 能下载的视频链接，自动回退到：下载 → 提取音频 → ASR 转写
 
 ## 依赖安装
 
 ### 必需
 
 ```bash
-# sherpa-onnx（离线 ASR 引擎）
-pip install sherpa-onnx
+pip install sherpa-onnx numpy yt-dlp
+```
 
-# numpy（sherpa-onnx 依赖）
-pip install numpy
-
-# ffmpeg（音视频处理）
-# Ubuntu/Debian:
+```bash
+# Ubuntu/Debian
 sudo apt install ffmpeg
-# macOS:
+# macOS
 brew install ffmpeg
 ```
 
-### 可选
+### 依赖检查
 
-```bash
-# yt-dlp（B站/YouTube 下载）
-pip install yt-dlp
-```
+脚本会自动检测缺失依赖并提示安装命令：
+- `sherpa-onnx` → `pip install sherpa-onnx`
+- `numpy` → `pip install numpy`
+- `ffmpeg` → `apt install ffmpeg` / `brew install ffmpeg`
+- `yt-dlp` → `pip install yt-dlp`
 
 ### TikHub Token（抖音/小红书/B站需要）
 
-在 `.env` 文件中配置：
-```
-TIKHUB_TOKEN=your_token_here
-```
-
-申请地址：https://tikhub.io/
+在 `.env` 中配置：`TIKHUB_TOKEN=your_token`
 
 ## 环境变量
 
-从 skill 目录下的 `.env` 读取：
-
 ```bash
 ASR_BACKEND=sherpa-onnx              # ASR 后端: sherpa-onnx (默认) | volcengine
-TIKHUB_TOKEN=xxx                     # TikHub API Token (抖音/小红书/B站)
+TIKHUB_TOKEN=xxx                     # TikHub API Token
 BYTEDANCE_VC_TOKEN=xxx               # 火山引擎 Token (volcengine 后端)
 BYTEDANCE_VC_APPID=xxx               # 火山引擎 AppID (volcengine 后端)
 ```
@@ -100,10 +96,10 @@ BYTEDANCE_VC_APPID=xxx               # 火山引擎 AppID (volcengine 后端)
 
 ### sherpa-onnx（默认）
 
-- **模型**：Paraformer 三语（普通话 + 粤语 + 英语），int8 量化
+- **模型**：Paraformer 三语（普通话 + 粤语 + 英语），int8 量化 (234MB)
+- **首次运行**：自动从 GitHub Releases 下载模型
 - **模型加载**：~15 秒
 - **转写速度**：10x+ 实时（RTF ≈ 0.08）
-- **依赖**：`pip install sherpa-onnx`
 - **离线运行**，无需 API Key
 
 ```bash
@@ -114,16 +110,15 @@ python3 "$HOME/.hermes/skills/video-to-subtitle-summary-skill/scripts/transcribe
 
 ### volcengine（可选）
 
-- **依赖**：`BYTEDANCE_VC_TOKEN` + `BYTEDANCE_VC_APPID`
-- **转写速度**：秒级（云端）
-- 开通：https://www.volcengine.com/
+- 云端转写，秒级返回
+- 需 `BYTEDANCE_VC_TOKEN` + `BYTEDANCE_VC_APPID`
 
 ## AI 总结
 
 脚本运行后，读取 `result.json` 中的 `text` 字段，交给 AI 生成总结：
 
 ```
-以下是一个视频的分析素材，请基于这些信息生成总结：
+以下是一个视频的分析素材：
 
 原视频标题：{video_info.title}
 来源平台：{video_info.platform}
@@ -142,11 +137,11 @@ python3 "$HOME/.hermes/skills/video-to-subtitle-summary-skill/scripts/transcribe
 
 | 问题 | 解决方案 |
 |------|----------|
-| `Missing dependency: sherpa-onnx` | `pip install sherpa-onnx` |
-| `Missing dependency: numpy` | `pip install numpy` |
-| `Missing dependency: ffmpeg` | `apt install ffmpeg` / `brew install ffmpeg` |
-| `Missing dependency: yt-dlp` | `pip install yt-dlp` |
+| `缺少依赖: sherpa-onnx` | `pip install sherpa-onnx` |
+| `缺少依赖: numpy` | `pip install numpy` |
+| `缺少依赖: ffmpeg` | `apt install ffmpeg` / `brew install ffmpeg` |
+| `缺少依赖: yt-dlp` | `pip install yt-dlp` |
 | `TIKHUB_TOKEN 缺失` | 在 `.env` 中填入 TikHub Token |
 | YouTube 无字幕 | 自动回退到 yt-dlp 下载音频 + ASR |
 | TikHub API 403 | 脚本已加 User-Agent，如仍失败请检查 Token |
-| 模型加载失败 | 检查 `sherpa-onnx-paraformer-trilingual-zh-cantonese-en/model.int8.onnx` 是否存在 |
+| 模型下载失败 | 手动下载：`wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-trilingual-zh-cantonese-en.tar.bz2` |
