@@ -26,3 +26,4 @@ sherpa-onnx/
 
 # 模型目录（大文件，已解压但不入库）
 sherpa-onnx-paraformer-*/
+__pycache__/
