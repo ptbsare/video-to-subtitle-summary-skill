@@ -4,7 +4,7 @@
 
 **现象**: `urllib.request.urlopen` 调用 TikHub API 返回 `HTTP Error 403: Forbidden`，但同一 Token 用 `curl` 正常。
 
-**根因**: `urllib.request` 默认 `User-Agent: Python-urllib/3.14`，被 TikHub 的 Cloudflare WAF 拦截。`curl` 自带浏览器 UA 所以能通过。
+**根因**: `urllib.request` 默认 `User-Agent: Python-urllib/3.14`，被 TikHub 的 Cloudflare WAF 拦截。
 
 **修复**: 所有 `urllib.request.Request` 调用必须携带浏览器 UA：
 ```python
@@ -15,88 +15,71 @@ headers = {
 }
 ```
 
-## 陷阱 2: ffmpeg 进度输出阻塞管道
+## 陷阱 2: TikHub `minimal=true` 导致下载地址为空
+
+**现象**: 抖音视频 `play_addr.url_list` 返回空列表，`video_url` 为 `None`，抛出 `ValueError: unknown url type: 'None'`。
+
+**根因**: TikHub 的 `minimal=true` 参数会精简响应，去掉 `play_addr` 等字段。
+
+**修复**: 不要使用 `minimal=true`。完整响应包含 `download_addr`（无水印）和 `play_addr`（有水印）两个下载地址，优先使用 `download_addr`。
+
+## 陷阱 3: ffmpeg 进度输出阻塞管道
 
 **现象**: ffmpeg 提取音频时进程卡住，不产生输出也不退出。
 
-**根因**: `-progress pipe:1` 将进度写到 stdout，但 `subprocess.run(capture_output=False)` 时 Python 不读取 stdout 管道。当管道缓冲区满（通常 64KB）后，ffmpeg 的 `write()` 调用阻塞，进程挂起。
+**根因**: `-progress pipe:1` 将进度写到 stdout，但 `capture_output=False` 时 Python 不读取 stdout 管道，管道缓冲区满后 ffmpeg 阻塞。
 
-**修复**: 使用 `capture_output=True` 静默捕获：
-```python
-subprocess.run(cmd, check=True, capture_output=True, timeout=timeout)
-```
+**修复**: 使用 `capture_output=True` 静默捕获。
 
-## 陷阱 3: Python stdout 缓冲（后台模式）
+## 陷阱 4: Python stdout 缓冲（后台模式）
 
-**现象**: `background=true` 模式下脚本长时间无输出，看起来像卡住了，但实际上在运行。
+**现象**: `background=true` 模式下脚本长时间无输出，看起来像卡住了。
 
 **根因**: Python 在 non-interactive 模式下 stdout 全缓冲。
 
 **修复**: shebang 改为 `#!/usr/bin/env python3 -u`（强制无缓冲）。
 
-## 陷阱 4: faster-whisper 在慢速 CPU 上极慢
+## 陷阱 5: faster-whisper 在慢速 CPU 上极慢
 
-**现象**: Xeon D-1581 @ 1.8GHz 上 small 模型加载需 140 秒，转写速度仅 0.2x 实时（7 分钟音频需 ~22 分钟）。
+**现象**: Xeon D-1581 @ 1.8GHz 上 small 模型加载需 140 秒，转写速度仅 0.2x 实时。
 
-**根因**: CPU 单核性能弱，ctranslate2 推理慢。模型加载是主要瓶颈。
+**根因**: CPU 单核性能弱，ctranslate2 推理慢。
 
 **修复**: 切换 sherpa-onnx Paraformer int8 — 模型加载 ~15s，转写 10x+ 实时（RTF ≈ 0.08）。
 
-## 陷阱 5: sherpa-onnx 模型文件缺失
+## 陷阱 6: sherpa-onnx 模型文件缺失或解压不完整
 
-**现象**: 首次运行时报 `Model file not found`。
+**现象**: `RuntimeError: Model file not found` 或 `Protobuf parsing failed`。
 
-**修复**: 脚本已内置自动下载逻辑。首次运行时自动从 GitHub Releases 下载并解压：
+**修复**: 脚本已内置自动下载逻辑。首次运行时自动从 GitHub Releases 下载：
 ```
 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-trilingual-zh-cantonese-en.tar.bz2
 ```
-解压后只保留 `model.int8.onnx` (234MB) + `tokens.txt`，删除其他无关文件。
+解压后只保留 `model.int8.onnx` (234MB) + `tokens.txt`。确保 tar 解压完成后再运行脚本。
 
-支持 `--no-auto-download` 参数跳过自动下载。
+## 陷阱 7: YouTube "Sign in to confirm you're not a bot"
 
-**注意**: 不要用 `-progress pipe:1 -nostats` 配 `capture_output=False`，这仍然会阻塞。
+**现象**: yt-dlp 下载 YouTube 视频时报 `ERROR: Sign in to confirm you're not a bot`。
 
-## 陷阱 3: Python stdout 缓冲导致后台运行无输出
+**根因**: YouTube 检测到非浏览器请求，要求 Cookie 验证。
 
-**现象**: `terminal(background=True)` 启动脚本后，`process(action="poll")` 返回空输出，但进程实际在运行。
+**修复**: 配置 Cookie 支持三种方式（优先级从高到低）：
+1. **（推荐）** 在 skill 目录下放置 `cookies.txt` 文件（Netscape 格式），脚本自动检测
+2. 环境变量 `YTDLP_COOKIE_FILE=/path/to/cookies.txt`
+3. 环境变量 `YTDLP_COOKIES="key1=val1; key2=val2; ..."`
 
-**根因**: Python 在 non-interactive 模式下对 stdout 做全缓冲。
+Cookie 导出教程：https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp
 
-**修复**: shebang 改为无缓冲模式：
-```python
-#!/usr/bin/env python3 -u
-```
+脚本会在检测到 Cookie 相关错误时自动打印配置指引。`cookies.txt` 已加入 `.gitignore`。
 
-## 陷阱 4: sherpa-onnx 模型加载需要 ~15 秒
-
-**现象**: 首次运行时模型加载阶段约 15 秒无输出。正常行为，不是卡死。
-
-**实测数据**（Intel Xeon D-1581 @ 1.8GHz, 20核, int8 模型）:
-- 模型加载: ~15 秒
-- 435 秒音频转写: ~38 秒（RTF=0.088，约 11x 实时）
-- 总流程（URL→字幕）: ~3 分钟
-
-**关键参数**: `cpu_threads` 必须设置（默认 1），建议设为 `min(cpu_count, 16)`。
-
-## 陷阱 5: sherpa-onnx 模型文件 protobuf 解析失败
-
-**现象**: `RuntimeError: Load model from .../model.onnx failed:Protobuf parsing failed.`
-
-**根因**: 模型文件解压不完整（tar 进程还在写文件时就尝试加载）。
-
-**修复**: 确保 tar 解压完成后再运行脚本。检查文件大小是否稳定。
-
-**注意**: 使用 `model.int8.onnx`（234MB）比 `model.onnx`（831MB）加载更快且精度损失小。
-
-## 陷阱 6: B站会员画质限制
+## 陷阱 8: B站会员画质限制
 
 **现象**: yt-dlp 下载 B站视频时提示 1080P 高码率格式需要会员。
 
 **表现**: yt-dlp 自动降级到 720P，不影响使用。
 
-## 陷阱 7: 依赖缺失时脚本应显式报错
+## 依赖清单
 
-**当前脚本依赖清单**:
 | 包 | 用途 | 安装命令 |
 |---|---|---|
 | `sherpa-onnx` | 离线 ASR | `pip install sherpa-onnx` |

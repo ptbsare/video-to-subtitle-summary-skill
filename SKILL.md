@@ -40,6 +40,10 @@ python3 .../video_to_summary.py /path/to/audio.mp3
 - `text.txt` — 纯文本
 - `result.json` — 完整结果 (含 text, video_info, segments, 文件路径)
 
+### 日志
+
+运行日志自动缓存到 `/tmp/video_analysis/` 目录。
+
 ## 支持平台
 
 **明确支持（有专门解析逻辑）：** 抖音/TikTok · 小红书 · B站 · YouTube
@@ -130,4 +134,12 @@ python3 "$HOME/.hermes/skills/video-to-subtitle-summary-skill/scripts/transcribe
 
 ## 已知陷阱
 
-详见 [references/pitfalls.md](references/pitfalls.md)。
+详见 [references/pitfalls.md](references/pitfalls.md)，包含以下场景的详细分析与修复：
+- TikHub API 403（urllib UA 问题）
+- TikHub `minimal=true` 导致下载地址为空
+- ffmpeg 进度输出阻塞管道
+- Python stdout 缓冲导致后台无输出
+- faster-whisper CPU 模式性能极低
+- sherpa-onnx 模型自动下载与清理
+- **YouTube Cookie 配置（"Sign in to confirm" 错误）**
+- B站会员画质限制
