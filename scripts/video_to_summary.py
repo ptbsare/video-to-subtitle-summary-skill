@@ -120,14 +120,24 @@ def fetch_video_info(url: str, platform: str, token: str) -> dict:
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     }
     if platform == "douyin":
-        api_url = f"https://api.tikhub.io/api/v1/hybrid/video_data?url={encoded}&minimal=true"
+        # 注意：不加 minimal=true，否则 play_addr.url_list 为空
+        api_url = f"https://api.tikhub.io/api/v1/hybrid/video_data?url={encoded}"
         req = urllib.request.Request(api_url, headers=headers)
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
         d = data.get("data", {})
+        # 优先用 download_addr（无水印），回退到 play_addr
+        video_url = None
+        download_addr = d.get("video", {}).get("download_addr", {}).get("url_list", [])
+        if download_addr:
+            video_url = download_addr[0]
+        if not video_url:
+            play_addr = d.get("video", {}).get("play_addr", {}).get("url_list", [])
+            if play_addr:
+                video_url = play_addr[0]
         return {"id": d.get("aweme_id", ""), "title": d.get("desc", ""),
                 "author": d.get("author", {}).get("nickname", ""),
-                "video_url": d.get("video", {}).get("play_addr", {}).get("url_list", [None])[0],
+                "video_url": video_url,
                 "platform": "抖音"}
     if platform == "xiaohongshu":
         api_url = f"https://api.tikhub.io/api/v1/xiaohongshu/web/get_note_info_v7?share_text={encoded}"
@@ -167,6 +177,14 @@ def download_bilibili(url: str, output_dir: Path) -> Path:
     video_path = output_dir / "video.mp4"
     run(["yt-dlp", "-o", str(video_path), url], timeout=600)
     return video_path
+
+def _ytdlp_download(url: str, video_path: Path) -> None:
+    """通用 yt-dlp 下载兜底，支持抖音/小红书等 200+ 平台"""
+    video_path.parent.mkdir(parents=True, exist_ok=True)
+    run(["yt-dlp", "--ignore-config", "-o", str(video_path), url], timeout=600)
+    if not video_path.exists():
+        raise RuntimeError(f"yt-dlp 下载失败: {url}")
+    print(f"  ✓ yt-dlp 下载完成: {video_path}", flush=True)
 
 def download_youtube_subtitles(url: str, output_dir: Path) -> dict | None:
     output_stem = output_dir / "subtitle"
@@ -427,12 +445,30 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if candidates: audio_path = candidates[0]
         elif platform == "douyin":
             video_path = output_dir / "video.mp4"
-            download_file(video_info["video_url"], video_path)
-            print(f"  ✓ 下载完成: {video_path}", flush=True)
+            video_url = video_info.get("video_url")
+            if video_url:
+                try:
+                    download_file(video_url, video_path)
+                    print(f"  ✓ TikHub 下载完成: {video_path}", flush=True)
+                except Exception as e:
+                    print(f"  ⚠ TikHub 下载失败: {e}，回退到 yt-dlp...", flush=True)
+                    _ytdlp_download(args.input, video_path)
+            else:
+                print(f"  ⚠ TikHub 未返回下载地址，使用 yt-dlp 下载...", flush=True)
+                _ytdlp_download(args.input, video_path)
         elif platform == "xiaohongshu":
             video_path = output_dir / "video.mp4"
-            download_file(video_info["video_url"], video_path)
-            print(f"  ✓ 下载完成: {video_path}", flush=True)
+            video_url = video_info.get("video_url")
+            if video_url:
+                try:
+                    download_file(video_url, video_path)
+                    print(f"  ✓ TikHub 下载完成: {video_path}", flush=True)
+                except Exception as e:
+                    print(f"  ⚠ TikHub 下载失败: {e}，回退到 yt-dlp...", flush=True)
+                    _ytdlp_download(args.input, video_path)
+            else:
+                print(f"  ⚠ TikHub 未返回下载地址，使用 yt-dlp 下载...", flush=True)
+                _ytdlp_download(args.input, video_path)
         elif platform == "bilibili":
             video_path = download_bilibili(args.input, output_dir)
             print(f"  ✓ 下载完成: {video_path}", flush=True)
