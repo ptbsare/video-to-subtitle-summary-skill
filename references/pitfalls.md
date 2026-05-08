@@ -26,6 +26,34 @@ headers = {
 subprocess.run(cmd, check=True, capture_output=True, timeout=timeout)
 ```
 
+## 陷阱 3: Python stdout 缓冲（后台模式）
+
+**现象**: `background=true` 模式下脚本长时间无输出，看起来像卡住了，但实际上在运行。
+
+**根因**: Python 在 non-interactive 模式下 stdout 全缓冲。
+
+**修复**: shebang 改为 `#!/usr/bin/env python3 -u`（强制无缓冲）。
+
+## 陷阱 4: faster-whisper 在慢速 CPU 上极慢
+
+**现象**: Xeon D-1581 @ 1.8GHz 上 small 模型加载需 140 秒，转写速度仅 0.2x 实时（7 分钟音频需 ~22 分钟）。
+
+**根因**: CPU 单核性能弱，ctranslate2 推理慢。模型加载是主要瓶颈。
+
+**修复**: 切换 sherpa-onnx Paraformer int8 — 模型加载 ~15s，转写 10x+ 实时（RTF ≈ 0.08）。
+
+## 陷阱 5: sherpa-onnx 模型文件缺失
+
+**现象**: 首次运行时报 `Model file not found`。
+
+**修复**: 脚本已内置自动下载逻辑。首次运行时自动从 GitHub Releases 下载并解压：
+```
+https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-trilingual-zh-cantonese-en.tar.bz2
+```
+解压后只保留 `model.int8.onnx` (234MB) + `tokens.txt`，删除其他无关文件。
+
+支持 `--no-auto-download` 参数跳过自动下载。
+
 **注意**: 不要用 `-progress pipe:1 -nostats` 配 `capture_output=False`，这仍然会阻塞。
 
 ## 陷阱 3: Python stdout 缓冲导致后台运行无输出

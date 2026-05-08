@@ -145,3 +145,13 @@ python3 "$HOME/.hermes/skills/video-to-subtitle-summary-skill/scripts/transcribe
 | YouTube 无字幕 | 自动回退到 yt-dlp 下载音频 + ASR |
 | TikHub API 403 | 脚本已加 User-Agent，如仍失败请检查 Token |
 | 模型下载失败 | 手动下载：`wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-trilingual-zh-cantonese-en.tar.bz2` |
+| 模型加载失败 | 检查 `sherpa-onnx-paraformer-trilingual-zh-cantonese-en/model.int8.onnx` 是否存在 |
+
+## 已知陷阱
+
+详见 [references/pitfalls.md](references/pitfalls.md)，包含以下场景的详细分析与修复：
+- TikHub API 403（urllib UA 问题）
+- ffmpeg 进度输出阻塞管道
+- Python stdout 缓冲导致后台无输出
+- faster-whisper CPU 模式性能极低
+- sherpa-onnx 模型自动下载与清理
