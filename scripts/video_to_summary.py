@@ -62,6 +62,7 @@ def load_env() -> dict[str, str]:
             val = val.strip().strip('"').strip("'")
             if key:
                 env[key] = val
+                os.environ.setdefault(key, val)  # 注入到 os.environ，不覆盖已有值
     return env
 
 def get_env(key: str, default: str | None = None, env_map: dict | None = None) -> str | None:
