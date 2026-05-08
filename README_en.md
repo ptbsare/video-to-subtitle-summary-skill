@@ -77,6 +77,18 @@ pip install yt-dlp
 
 Sign up at https://tikhub.io/ — 100 free requests/day, paid from $0.001/request.
 
+### YouTube Cookie (fix "Sign in to confirm you're not a bot")
+
+YouTube often requires login verification to download. Three methods supported (by priority):
+
+1. **(Recommended)** Place a `cookies.txt` file (Netscape format) in the skill directory — auto-detected
+2. Env var `YTDLP_COOKIE_FILE=/path/to/cookies.txt`
+3. Env var `YTDLP_COOKIES="key1=val1; key2=val2; ..."`
+
+Cookie export guide: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp
+
+> `cookies.txt` is in `.gitignore` and will not be committed.
+
 ## Quick Start
 
 ### 1. Install Python Dependencies

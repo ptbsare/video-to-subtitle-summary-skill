@@ -11,6 +11,9 @@ __pycache__/
 # 环境
 .env
 
+# Cookie 文件（敏感信息，不要提交）
+cookies.txt
+
 # IDE
 .vscode/
 .idea/

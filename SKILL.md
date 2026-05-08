@@ -40,57 +40,44 @@ python3 .../video_to_summary.py /path/to/audio.mp3
 - `text.txt` — 纯文本
 - `result.json` — 完整结果 (含 text, video_info, segments, 文件路径)
 
-### 日志
-
-运行日志自动缓存到 `/tmp/video_analysis/` 目录。
-
 ## 支持平台
 
-**明确支持（有专门解析逻辑）：**
-- 抖音/TikTok (`douyin.com` / `tiktok.com`)
-- 小红书 (`xiaohongshu.com` / `xhslink.com`)
-- B站 (`bilibili.com` / `b23.tv`)
-- YouTube (`youtube.com` / `youtu.be`)
+**明确支持（有专门解析逻辑）：** 抖音/TikTok · 小红书 · B站 · YouTube
 
-**通用支持（yt-dlp 兼容，自动回退）：**
-- 微博、知乎、快手、西瓜视频等 **200+ 平台**
-- 任何 yt-dlp 能下载的视频链接，自动回退到：下载 → 提取音频 → ASR 转写
+**通用支持（yt-dlp 自动回退）：** 微博、知乎、快手、西瓜视频等 **200+ 平台**
 
-## 依赖安装
+## 依赖
 
-### 必需
+脚本自动检测缺失依赖并提示安装命令。
 
 ```bash
+# 必需
 pip install sherpa-onnx numpy yt-dlp
+sudo apt install ffmpeg   # Ubuntu/Debian
 ```
+
+## 环境变量（在 `.env` 中配置）
 
 ```bash
-# Ubuntu/Debian
-sudo apt install ffmpeg
-# macOS
-brew install ffmpeg
+ASR_BACKEND=sherpa-onnx    # ASR 后端: sherpa-onnx (默认) | volcengine
+TIKHUB_TOKEN=xxx           # TikHub API Token（抖音/小红书/B站）
+
+# YouTube Cookie（解决 "Sign in to confirm you're not a bot"）
+YTDLP_COOKIE_FILE=xxx      # Cookie 文件路径（Netscape 格式）
+# 或直接把 cookies.txt 放在 skill 根目录（自动检测，已加入 .gitignore）
 ```
 
-### 依赖检查
+### YouTube Cookie 配置
 
-脚本会自动检测缺失依赖并提示安装命令：
-- `sherpa-onnx` → `pip install sherpa-onnx`
-- `numpy` → `pip install numpy`
-- `ffmpeg` → `apt install ffmpeg` / `brew install ffmpeg`
-- `yt-dlp` → `pip install yt-dlp`
+YouTube 经常需要登录验证才能下载，支持三种方式（优先级从高到低）：
 
-### TikHub Token（抖音/小红书/B站需要）
+1. **（推荐）** 在 skill 目录下放置 `cookies.txt` 文件（会自动检测）
+2. 环境变量 `YTDLP_COOKIE_FILE=/path/to/cookies.txt`
+3. 环境变量 `YTDLP_COOKIES="key1=val1; key2=val2; ..."`
 
-在 `.env` 中配置：`TIKHUB_TOKEN=your_token`
+Cookie 导出教程：<https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp>
 
-## 环境变量
-
-```bash
-ASR_BACKEND=sherpa-onnx              # ASR 后端: sherpa-onnx (默认) | volcengine
-TIKHUB_TOKEN=xxx                     # TikHub API Token
-BYTEDANCE_VC_TOKEN=xxx               # 火山引擎 Token (volcengine 后端)
-BYTEDANCE_VC_APPID=xxx               # 火山引擎 AppID (volcengine 后端)
-```
+> `cookies.txt` 已加入 `.gitignore`，不会提交到仓库。
 
 ## ASR 后端
 
@@ -98,8 +85,7 @@ BYTEDANCE_VC_APPID=xxx               # 火山引擎 AppID (volcengine 后端)
 
 - **模型**：Paraformer 三语（普通话 + 粤语 + 英语），int8 量化 (234MB)
 - **首次运行**：自动从 GitHub Releases 下载模型
-- **模型加载**：~15 秒
-- **转写速度**：10x+ 实时（RTF ≈ 0.08）
+- **模型加载**：~15 秒，**转写速度**：10x+ 实时（RTF ≈ 0.08）
 - **离线运行**，无需 API Key
 
 ```bash
@@ -138,20 +124,10 @@ python3 "$HOME/.hermes/skills/video-to-subtitle-summary-skill/scripts/transcribe
 | 问题 | 解决方案 |
 |------|----------|
 | `缺少依赖: sherpa-onnx` | `pip install sherpa-onnx` |
-| `缺少依赖: numpy` | `pip install numpy` |
-| `缺少依赖: ffmpeg` | `apt install ffmpeg` / `brew install ffmpeg` |
-| `缺少依赖: yt-dlp` | `pip install yt-dlp` |
-| `TIKHUB_TOKEN 缺失` | 在 `.env` 中填入 TikHub Token |
-| YouTube 无字幕 | 自动回退到 yt-dlp 下载音频 + ASR |
-| TikHub API 403 | 脚本已加 User-Agent，如仍失败请检查 Token |
+| YouTube "Sign in to confirm" | 配置 Cookie（见上方说明） |
+| TikHub API 403 | 检查 Token，脚本已加 User-Agent |
 | 模型下载失败 | 手动下载：`wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-trilingual-zh-cantonese-en.tar.bz2` |
-| 模型加载失败 | 检查 `sherpa-onnx-paraformer-trilingual-zh-cantonese-en/model.int8.onnx` 是否存在 |
 
 ## 已知陷阱
 
-详见 [references/pitfalls.md](references/pitfalls.md)，包含以下场景的详细分析与修复：
-- TikHub API 403（urllib UA 问题）
-- ffmpeg 进度输出阻塞管道
-- Python stdout 缓冲导致后台无输出
-- faster-whisper CPU 模式性能极低
-- sherpa-onnx 模型自动下载与清理
+详见 [references/pitfalls.md](references/pitfalls.md)。

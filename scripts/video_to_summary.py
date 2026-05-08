@@ -186,10 +186,68 @@ def _ytdlp_download(url: str, video_path: Path) -> None:
         raise RuntimeError(f"yt-dlp 下载失败: {url}")
     print(f"  ✓ yt-dlp 下载完成: {video_path}", flush=True)
 
+def _build_ytdlp_cookie_args() -> list:
+    """构建 yt-dlp Cookie 参数，支持环境变量和 Cookie 文件"""
+    args = []
+    # 方式1: 环境变量 YTDLP_COOKIES 直接传 Cookie 字符串
+    cookies_str = os.environ.get("YTDLP_COOKIES", "")
+    if cookies_str:
+        args += ["--cookies", cookies_str]
+    # 方式2: 环境变量 YTDLP_COOKIE_FILE 传 Cookie 文件路径
+    cookie_file = os.environ.get("YTDLP_COOKIE_FILE", "")
+    if cookie_file and Path(cookie_file).exists():
+        args += ["--cookies", cookie_file]
+    # 方式3: skill 目录下的 cookies.txt 文件（自动检测）
+    default_cookie_file = SKILL_DIR / "cookies.txt"
+    if default_cookie_file.exists():
+        args += ["--cookies", str(default_cookie_file)]
+    return args
+
+def _ytdlp_download_audio(url: str, audio_path: Path) -> None:
+    """下载音频（带 Cookie 支持），失败时打印友好提示"""
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    cookie_args = _build_ytdlp_cookie_args()
+    cmd = ["yt-dlp", "--ignore-config"] + cookie_args + [
+        "-x", "--audio-format", "mp3",
+        "-o", str(audio_path.with_suffix("")), url]
+    try:
+        run(cmd, timeout=300)
+    except RuntimeError as e:
+        # 检测是否是 Cookie 相关错误
+        err_str = str(e)
+        if "Sign in" in err_str or "cookie" in err_str.lower() or "confirm" in err_str.lower():
+            log_hint = (
+                "\n  ⚠ YouTube 需要登录验证（Cookie）才能下载。"
+                "\n  请任选以下方式之一配置 Cookie："
+                "\n"
+                "\n  方式1（推荐）: 在 skill 目录下放置 cookies.txt 文件"
+                "\n    → 从浏览器导出 YouTube Cookie（Netscape 格式），保存为："
+                f"\n      {SKILL_DIR}/cookies.txt"
+                "\n"
+                "\n  方式2: 设置环境变量 YTDLP_COOKIE_FILE"
+                "\n    → export YTDLP_COOKIE_FILE=/path/to/cookies.txt"
+                "\n"
+                "\n  方式3: 设置环境变量 YTDLP_COOKIES（直接传 Cookie 字符串）"
+                "\n    → export YTDLP_COOKIES=\"key1=val1; key2=val2; ...\""
+                "\n"
+                "\n  导出教程: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp"
+            )
+            print(log_hint, flush=True)
+            raise RuntimeError(f"yt-dlp 下载失败（需要 Cookie 验证）\n{err_str}") from e
+        raise
+    if not audio_path.exists():
+        candidates = list(audio_path.parent.glob("audio.*"))
+        if candidates:
+            audio_path = candidates[0]
+        else:
+            raise RuntimeError(f"yt-dlp 下载失败: 未找到输出文件")
+
 def download_youtube_subtitles(url: str, output_dir: Path) -> dict | None:
     output_stem = output_dir / "subtitle"
+    cookie_args = _build_ytdlp_cookie_args()
     try:
-        run(["yt-dlp", "--ignore-config", "--skip-download",
+        run(["yt-dlp", "--ignore-config"] + cookie_args + [
+             "--skip-download",
              "--write-subs", "--write-auto-subs", "--sub-format", "vtt",
              "--sub-langs", ",".join(YOUTUBE_LANGUAGES),
              "-o", str(output_stem), url], timeout=120)
@@ -438,11 +496,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 print("  ⚠ 无可用字幕，回退到 ASR 转写", flush=True)
                 audio_path = output_dir / "audio.mp3"
-                run(["yt-dlp", "--ignore-config", "-x", "--audio-format", "mp3",
-                     "-o", str(audio_path.with_suffix("")), args.input], timeout=300)
-                if not audio_path.exists():
-                    candidates = list(output_dir.glob("audio.*"))
-                    if candidates: audio_path = candidates[0]
+                _ytdlp_download_audio(args.input, audio_path)
         elif platform == "douyin":
             video_path = output_dir / "video.mp4"
             video_url = video_info.get("video_url")

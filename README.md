@@ -77,6 +77,18 @@ pip install yt-dlp
 
 免费套餐 100 次/天，付费从 $0.001/次起。
 
+### YouTube Cookie（解决 "Sign in to confirm you're not a bot"）
+
+YouTube 经常需要登录验证才能下载。支持三种方式（优先级从高到低）：
+
+1. **（推荐）** 在 skill 目录下放置 `cookies.txt` 文件（Netscape 格式），脚本自动检测
+2. 环境变量 `YTDLP_COOKIE_FILE=/path/to/cookies.txt`
+3. 环境变量 `YTDLP_COOKIES="key1=val1; key2=val2; ..."`
+
+Cookie 导出教程：https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp
+
+> `cookies.txt` 已加入 `.gitignore`，不会提交到仓库。
+
 ## 快速安装
 
 ### 1. 安装 Python 依赖
