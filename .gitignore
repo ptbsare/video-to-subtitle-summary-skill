@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+
+# 输出 / 测试
+/tmp/
+
+# 环境
+.env
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# 大文件 — 模型压缩包
+*.tar.bz2
+*.tar.gz
+*.zip
+
+# sherpa-onnx 源码仓库（太大）
+sherpa-onnx/
+
+# 模型目录（大文件，已解压但不入库）
+sherpa-onnx-paraformer-*/
