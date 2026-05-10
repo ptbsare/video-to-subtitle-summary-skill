@@ -1,6 +1,8 @@
 ---
-name: video-to-subtitle-summary
+name: video-to-subtitle-summary-skill
 description: Use when user provides a short video platform URL (Douyin, Xiaohongshu, Bilibili, YouTube, etc.) or a local video/audio file path and wants to extract subtitles and generate AI summary. Triggers on URLs like v.douyin.com, xhslink.com, xiaohongshu.com, bilibili.com, b23.tv, youtube.com, youtu.be, share links, or local file paths ending in .mp4/.mp3/.wav etc.
+
+Also supports running as an MCP stdio server via: python3 mcp_server.py or uvx github.com/ptbsare/video-to-subtitle-summary-skill
 ---
 
 # 视频转字幕与 AI 总结

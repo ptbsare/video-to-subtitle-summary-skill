@@ -94,7 +94,7 @@ Cookie 导出教程：https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-co
 ### 1. 安装 Python 依赖
 
 ```bash
-pip install sherpa-onnx numpy yt-dlp
+pip install sherpa-onnx numpy yt-dlp mcp
 ```
 
 ### 2. 安装 ffmpeg
@@ -116,6 +116,8 @@ cp .env.example .env
 
 ### 4. 运行
 
+#### 作为独立脚本运行
+
 ```bash
 # 在线视频
 python3 scripts/video_to_summary.py "https://www.bilibili.com/video/BVxxx"
@@ -124,6 +126,40 @@ python3 scripts/video_to_summary.py "https://v.douyin.com/xxx"
 # 本地文件
 python3 scripts/video_to_summary.py /path/to/video.mp4
 python3 scripts/video_to_summary.py /path/to/audio.mp3
+```
+
+#### 作为 MCP 服务器运行
+
+```bash
+# 启动 MCP 服务器
+python3 mcp_server.py
+
+# 或者使用 uvx (需要先构建包)
+uvx video-to-subtitle-summary-skill
+```
+
+## MCP 服务器使用
+
+MCP 服务器模式允许你将此技能集成到支持 MCP 协议的应用中。
+
+### 工具定义
+
+服务器暴露一个工具：**video_to_subtitle_summary**
+
+**参数：**
+- `input` (必需): 视频 URL 或本地文件路径
+- `output_dir` (可选): 输出目录，默认为 `/tmp/video_analysis/<video_id>`
+
+### 示例调用
+
+```json
+{
+  "name": "video_to_subtitle_summary",
+  "arguments": {
+    "input": "https://www.bilibili.com/video/BVxxx",
+    "output_dir": "/tmp/my_analysis"
+  }
+}
 ```
 
 ## 模型
