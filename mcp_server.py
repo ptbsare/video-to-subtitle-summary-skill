@@ -304,6 +304,7 @@ def _srt_time(seconds: float) -> str:
 def transcribe_sherpa_onnx(audio_path: Path, output_dir: Path, env_map: dict) -> dict:
     import sherpa_onnx
     import wave
+    import numpy as np
 
     model_path = _MODEL_DIR / "model.int8.onnx"
     tokens_path = _MODEL_DIR / "tokens.txt"
