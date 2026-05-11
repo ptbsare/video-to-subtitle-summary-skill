@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-MCP stdio server for video-to-subtitle-summary-skill
+MCP stdio server for video-to-subtitle-summary-skill (async task version)
 
-This server exposes the video-to-subtitle-summary-skill as an MCP tool.
-It can extract subtitles and generate AI summaries from videos on various platforms
-or local video/audio files.
+Two tools:
+  1. submit_video_task  — accepts a video URL or file path, starts background
+                          processing, returns a task_id immediately.
+  2. query_video_task   — accepts a task_id, returns current status + progress
+                          (pending / processing / completed / expired).
+                          When completed the full subtitle text is returned
+                          directly — no file read needed.
 
 Usage:
   python3 mcp_server.py
-  
-The server will start and listen on stdin/stdout for MCP messages.
 """
 
 from __future__ import annotations
@@ -25,6 +27,9 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import uuid
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -40,9 +45,17 @@ VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma"}
 DEFAULT_OUTPUT_BASE = Path("/tmp/video_analysis")
 
+# Task TTL — how long (seconds) a completed task stays in memory before expiry
+TASK_TTL = 3600  # 1 hour
+# How often (seconds) the background sweeper purges expired tasks
+SWEEP_INTERVAL = 300  # 5 minutes
+
+logger = logging.getLogger("mcp_server")
+
 # ── .env 加载 ─────────────────────────────────────────────────────────
 
 def load_env() -> dict[str, str]:
+    """Load .env file. OS environment variables always take priority."""
     env: dict[str, str] = {}
     if ENV_FILE.exists():
         for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
@@ -54,12 +67,19 @@ def load_env() -> dict[str, str]:
             val = val.strip().strip('"').strip("'")
             if key:
                 env[key] = val
+                # Only set OS env if not already set — OS env always wins
                 os.environ.setdefault(key, val)
+    # Merge OS env vars so they appear in the map with highest priority
+    for key in env:
+        os_val = os.getenv(key)
+        if os_val is not None:
+            env[key] = os_val
     return env
 
 def get_env(key: str, default: str | None = None, env_map: dict | None = None) -> str | None:
+    """Resolve env var: OS env > .env file > default."""
     env_map = env_map or {}
-    return env_map.get(key) or os.getenv(key) or default
+    return os.getenv(key) or env_map.get(key) or default
 
 # ── 工具函数 ──────────────────────────────────────────────────────────
 
@@ -279,7 +299,7 @@ def transcribe_sherpa_onnx(audio_path: Path, output_dir: Path, env_map: dict) ->
         script = SKILL_DIR / "transcribe_sherpa_onnx.py"
     if not script.exists():
         raise RuntimeError("sherpa-onnx 转写脚本不存在")
-    
+
     cmd = [
         sys.executable, str(script), str(audio_path),
         "--output-dir", str(output_dir),
@@ -349,7 +369,7 @@ def transcribe_volcengine(audio_path: Path, output_dir: Path, env_map: dict) -> 
     return {"srt_path": str(srt_path), "text_path": str(text_path),
             "segments": len(utterances), "text": " ".join(text_parts)}
 
-# ── 主要处理函数 ──────────────────────────────────────────────────────
+# ── 同步处理函数（在后台线程中运行） ────────────────────────────────
 
 def process_video_to_subtitle_summary(input_path: str, output_dir: str = None) -> dict:
     env_map = load_env()
@@ -378,7 +398,7 @@ def process_video_to_subtitle_summary(input_path: str, output_dir: str = None) -
             missing.append("BYTEDANCE_VC_TOKEN")
         if not get_env("BYTEDANCE_VC_APPID", env_map=env_map):
             missing.append("BYTEDANCE_VC_APPID")
-    
+
     if missing:
         raise RuntimeError(f"缺少依赖: {', '.join(missing)}")
 
@@ -488,6 +508,370 @@ def process_video_to_subtitle_summary(input_path: str, output_dir: str = None) -
         "audio_path": str(audio_path) if audio_path and audio_path.exists() else None,
     }
 
+# ── 带进度追踪的处理函数 ────────────────────────────────────────────
+
+# Pipeline stages for progress reporting
+_STAGES = [
+    "validating",       # 检查依赖 & 输入
+    "fetching_info",    # 获取视频信息 (TikHub)
+    "downloading",      # 下载视频/音频
+    "extracting_audio", # 提取音频 (ffmpeg)
+    "transcribing",     # ASR 转写
+    "finalizing",       # 生成输出文件
+]
+
+def process_video_with_progress(input_path: str, output_dir: str, task_store: "TaskStore", task_id: str) -> None:
+    """Run the full pipeline while updating task progress, then store the result."""
+    env_map = load_env()
+    asr_backend = get_env("ASR_BACKEND", "sherpa-onnx", env_map)
+    tikhub_token = get_env("TIKHUB_TOKEN", env_map=env_map)
+
+    def set_stage(stage: str, extra: str = ""):
+        task_store.update_progress(task_id, stage, extra)
+
+    try:
+        # ── Stage: validating ──
+        set_stage("validating")
+        mode, platform = detect_input(input_path)
+
+        missing: list[str] = []
+        if mode == "url" and platform in ("bilibili", "youtube"):
+            if not check_dep("yt-dlp"):
+                missing.append("yt-dlp (pip install yt-dlp)")
+        if mode == "url" and platform in ("douyin", "xiaohongshu", "bilibili"):
+            if not tikhub_token:
+                missing.append("TIKHUB_TOKEN (在 .env 中配置)")
+        if mode == "local_video":
+            if not check_dep("ffmpeg"):
+                missing.append("ffmpeg (apt/brew install ffmpeg)")
+        if asr_backend == "sherpa-onnx":
+            try:
+                import sherpa_onnx  # noqa: F401
+            except ImportError:
+                missing.append("sherpa-onnx (pip install sherpa-onnx)")
+        elif asr_backend == "volcengine":
+            if not get_env("BYTEDANCE_VC_TOKEN", env_map=env_map):
+                missing.append("BYTEDANCE_VC_TOKEN")
+            if not get_env("BYTEDANCE_VC_APPID", env_map=env_map):
+                missing.append("BYTEDANCE_VC_APPID")
+
+        if missing:
+            raise RuntimeError(f"缺少依赖: {', '.join(missing)}")
+
+        video_info: dict = {}
+        video_path: Path | None = None
+        audio_path: Path | None = None
+        subtitle_from_youtube = False
+        output_dir_path: Path | None = None
+
+        # ── Stage: fetching_info ──
+        set_stage("fetching_info")
+        if mode == "url":
+            if platform == "youtube":
+                video_id = extract_youtube_id(input_path)
+                video_info = {"id": video_id, "title": "", "author": "", "platform": "YouTube"}
+            elif platform == "unknown":
+                video_info = {"id": "unknown", "title": "", "author": "", "platform": "未知"}
+            else:
+                if not tikhub_token:
+                    raise RuntimeError("需要 TIKHUB_TOKEN 来获取视频信息")
+                try:
+                    video_info = fetch_video_info(input_path, platform, tikhub_token)
+                except Exception:
+                    video_info = {"id": "unknown", "title": "", "author": "", "platform": platform}
+            vid = video_info.get("id", "unknown")
+            output_dir_path = Path(output_dir) if output_dir else DEFAULT_OUTPUT_BASE / vid
+            output_dir_path.mkdir(parents=True, exist_ok=True)
+        else:
+            local_path = Path(input_path).expanduser().resolve()
+            vid = local_path.stem
+            output_dir_path = Path(output_dir) if output_dir else DEFAULT_OUTPUT_BASE / vid
+            output_dir_path.mkdir(parents=True, exist_ok=True)
+            video_info = {"id": vid, "title": local_path.stem, "author": "", "platform": "本地文件"}
+
+        # ── Stage: downloading / extracting_audio ──
+        if mode == "url":
+            if platform == "youtube":
+                set_stage("downloading", "尝试下载 YouTube 字幕")
+                sub_result = download_youtube_subtitles(input_path, output_dir_path)
+                if sub_result:
+                    subtitle_from_youtube = True
+                else:
+                    set_stage("downloading", "下载 YouTube 音频")
+                    audio_path = output_dir_path / "audio.mp3"
+                    _ytdlp_download_audio(input_path, audio_path)
+            elif platform == "douyin":
+                set_stage("downloading", "下载抖音视频")
+                video_path = output_dir_path / "video.mp4"
+                video_url = video_info.get("video_url")
+                if video_url:
+                    try:
+                        download_file(video_url, video_path)
+                    except Exception:
+                        _ytdlp_download(input_path, video_path)
+                else:
+                    _ytdlp_download(input_path, video_path)
+            elif platform == "xiaohongshu":
+                set_stage("downloading", "下载小红书视频")
+                video_path = output_dir_path / "video.mp4"
+                video_url = video_info.get("video_url")
+                if video_url:
+                    try:
+                        download_file(video_url, video_path)
+                    except Exception:
+                        _ytdlp_download(input_path, video_path)
+                else:
+                    _ytdlp_download(input_path, video_path)
+            elif platform == "bilibili":
+                set_stage("downloading", "下载B站视频")
+                video_path = output_dir_path / "video.mp4"
+                run(_ytdlp_cmd(input_path, str(video_path)), timeout=600)
+            else:
+                set_stage("downloading", "下载视频")
+                try:
+                    video_path = output_dir_path / "video.mp4"
+                    run(_ytdlp_cmd(input_path, str(video_path)), timeout=600)
+                except RuntimeError:
+                    raise RuntimeError("无法下载该 URL")
+
+            if not subtitle_from_youtube and audio_path is None and video_path and video_path.exists():
+                set_stage("extracting_audio", "ffmpeg 提取音频")
+                audio_path = output_dir_path / "audio.mp3"
+                extract_audio(video_path, audio_path)
+        else:
+            local_path = Path(input_path).expanduser().resolve()
+            if mode == "local_video":
+                video_path = output_dir_path / local_path.name
+                if video_path.resolve() != local_path.resolve():
+                    shutil.copy2(local_path, video_path)
+                set_stage("extracting_audio", "ffmpeg 提取音频")
+                audio_path = output_dir_path / "audio.mp3"
+                extract_audio(video_path, audio_path)
+            else:
+                audio_path = output_dir_path / local_path.name
+                if audio_path.resolve() != local_path.resolve():
+                    shutil.copy2(local_path, audio_path)
+
+        # ── Stage: transcribing ──
+        set_stage("transcribing", f"ASR 后端: {asr_backend}")
+        if not subtitle_from_youtube:
+            if asr_backend == "sherpa-onnx":
+                result = transcribe_sherpa_onnx(audio_path, output_dir_path, env_map)
+            elif asr_backend == "volcengine":
+                result = transcribe_volcengine(audio_path, output_dir_path, env_map)
+            else:
+                raise RuntimeError(f"不支持的 ASR_BACKEND: {asr_backend}")
+        else:
+            result = {"text": "YouTube 字幕已提取"}
+
+        # ── Stage: finalizing ──
+        set_stage("finalizing")
+        srt_path = output_dir_path / "subtitle.srt"
+        text_path = output_dir_path / "text.txt"
+        if not text_path.exists():
+            raise RuntimeError("未生成字幕文本")
+        text_content = text_path.read_text(encoding="utf-8").strip()
+
+        result_data = {
+            "video_info": video_info,
+            "text_content": text_content,
+            "output_dir": str(output_dir_path),
+            "srt_path": str(srt_path) if srt_path.exists() else None,
+            "text_path": str(text_path),
+            "video_path": str(video_path) if video_path and video_path.exists() else None,
+            "audio_path": str(audio_path) if audio_path and audio_path.exists() else None,
+        }
+
+        task_store.complete_task(task_id, result_data)
+
+    except Exception as exc:
+        task_store.fail_task(task_id, str(exc))
+
+# ── Task store ────────────────────────────────────────────────────────
+
+class TaskStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    EXPIRED = "expired"
+
+@dataclass
+class TaskRecord:
+    task_id: str
+    status: TaskStatus
+    created_at: float
+    updated_at: float
+    # Progress
+    stage: str = ""           # current pipeline stage name
+    stage_detail: str = ""    # human-readable detail
+    percent: int = 0          # rough 0-100
+    # Result
+    result: dict | None = None
+    error: str | None = None
+
+class TaskStore:
+    """Thread-safe in-memory task store with TTL expiry."""
+
+    def __init__(self, ttl: int = TASK_TTL, sweep_interval: int = SWEEP_INTERVAL):
+        self._tasks: dict[str, TaskRecord] = {}
+        self._ttl = ttl
+        self._lock = asyncio.Lock()
+
+    # ── public API ──
+
+    async def create_task(self, input_path: str, output_dir: str | None) -> str:
+        task_id = uuid.uuid4().hex[:12]
+        now = time.time()
+        async with self._lock:
+            self._tasks[task_id] = TaskRecord(
+                task_id=task_id,
+                status=TaskStatus.PENDING,
+                created_at=now,
+                updated_at=now,
+                stage="pending",
+                percent=0,
+            )
+        return task_id
+
+    async def mark_processing(self, task_id: str):
+        async with self._lock:
+            t = self._tasks.get(task_id)
+            if t:
+                t.status = TaskStatus.PROCESSING
+                t.updated_at = time.time()
+
+    def update_progress(self, task_id: str, stage: str, detail: str = ""):
+        """Called from background thread — no async lock, direct mutation."""
+        t = self._tasks.get(task_id)
+        if not t:
+            return
+        t.stage = stage
+        t.stage_detail = detail
+        # Map stage to rough percentage
+        stage_order = {s: i for i, s in enumerate(_STAGES)}
+        idx = stage_order.get(stage, 0)
+        t.percent = min(int((idx / len(_STAGES)) * 100), 99)
+        t.updated_at = time.time()
+
+    def complete_task(self, task_id: str, result: dict):
+        t = self._tasks.get(task_id)
+        if not t:
+            return
+        t.status = TaskStatus.COMPLETED
+        t.result = result
+        t.percent = 100
+        t.stage = "completed"
+        t.stage_detail = "处理完成"
+        t.updated_at = time.time()
+
+    def fail_task(self, task_id: str, error: str):
+        t = self._tasks.get(task_id)
+        if not t:
+            return
+        t.status = TaskStatus.FAILED
+        t.error = error
+        t.stage = "failed"
+        t.stage_detail = error[:200]
+        t.updated_at = time.time()
+
+    async def get_task(self, task_id: str) -> TaskRecord | None:
+        async with self._lock:
+            t = self._tasks.get(task_id)
+            if t is None:
+                return None
+            if t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+                if time.time() - t.updated_at > self._ttl:
+                    t.status = TaskStatus.EXPIRED
+            return t
+
+    async def sweep_expired(self):
+        """Remove tasks older than TTL. Called periodically."""
+        now = time.time()
+        async with self._lock:
+            expired_keys = [
+                k for k, v in self._tasks.items()
+                if now - v.updated_at > self._ttl
+            ]
+            for k in expired_keys:
+                del self._tasks[k]
+
+    async def purge_all(self):
+        async with self._lock:
+            self._tasks.clear()
+
+# ── Global store instance ─────────────────────────────────────────────
+
+task_store = TaskStore()
+
+# ── Background sweeper ────────────────────────────────────────────────
+
+async def _sweep_loop():
+    while True:
+        await asyncio.sleep(SWEEP_INTERVAL)
+        await task_store.sweep_expired()
+
+# ── Build response text from task record ──────────────────────────────
+
+def _format_task_response(t: TaskRecord) -> str:
+    """Format a task record into the MCP text response."""
+    status_label = {
+        TaskStatus.PENDING: "⏳ 等待中",
+        TaskStatus.PROCESSING: "🔄 处理中",
+        TaskStatus.COMPLETED: "✅ 已完成",
+        TaskStatus.FAILED: "❌ 失败",
+        TaskStatus.EXPIRED: "⌛ 已过期",
+    }.get(t.status, str(t.status))
+
+    lines = [
+        f"## 任务 {t.task_id}",
+        f"",
+        f"| 状态 | {status_label} |",
+        f"| 阶段 | {t.stage} |",
+        f"| 进度 | {t.percent}% |",
+    ]
+
+    if t.stage_detail:
+        lines.append(f"| 详情 | {t.stage_detail} |")
+
+    if t.status == TaskStatus.COMPLETED and t.result:
+        result = t.result
+        text_content = result.get("text_content", "")
+        video_info = result.get("video_info", {})
+
+        lines += [
+            f"",
+            f"### 视频信息",
+            f"| 平台 | {video_info.get('platform', 'N/A')} |",
+            f"| 标题 | {video_info.get('title', 'N/A')} |",
+            f"| 作者 | {video_info.get('author', 'N/A')} |",
+            f"",
+            f"### 字幕文本",
+            f"",
+            f"```",
+            f"{text_content[:3000]}{'…' if len(text_content) > 3000 else ''}",
+            f"```",
+        ]
+        if result.get('srt_path'):
+            lines.append(f"- SRT 字幕: {result['srt_path']}")
+        if result.get('text_path'):
+            lines.append(f"- 纯文本: {result['text_path']}")
+        lines.append(f"- 输出目录: {result.get('output_dir', '')}")
+
+    elif t.status == TaskStatus.FAILED:
+        lines += [
+            f"",
+            f"### 错误信息",
+            f"```",
+            f"{t.error or '未知错误'}",
+            f"```",
+        ]
+
+    elif t.status == TaskStatus.EXPIRED:
+        lines.append(f"\n任务已过期，请重新提交。")
+
+    return "\n".join(lines)
+
 # ── MCP 服务器实现 ──────────────────────────────────────────────────
 
 app = Server("video-to-subtitle-summary-skill")
@@ -496,21 +880,43 @@ app = Server("video-to-subtitle-summary-skill")
 async def list_tools() -> list[types.Tool]:
     return [
         types.Tool(
-            name="video_to_subtitle_summary",
-            description="Extract subtitles and generate AI summaries from videos on various platforms or local video/audio files. Supports Douyin, Xiaohongshu, Bilibili, YouTube, and local files.",
+            name="submit_video_task",
+            description=(
+                "提交一个视频转字幕任务，立即返回 task_id。"
+                "支持抖音、小红书、B站、YouTube 等平台的 URL 或本地视频/音频文件路径。"
+                "使用 query_video_task 轮询任务进度和结果。"
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "input": {
                         "type": "string",
-                        "description": "Video URL or local file path. Supported platforms: douyin.com, xiaohongshu.com, bilibili.com, youtube.com, or local video/audio files (.mp4, .mp3, .wav, etc.)"
+                        "description": "视频 URL 或本地文件路径。支持平台: douyin.com, xiaohongshu.com, bilibili.com, youtube.com, 或本地视频/音频文件 (.mp4, .mp3, .wav 等)"
                     },
                     "output_dir": {
                         "type": "string",
-                        "description": "Optional output directory. Default: /tmp/video_analysis/<video_id>"
+                        "description": "可选输出目录。默认: /tmp/video_analysis/<video_id>"
                     }
                 },
                 "required": ["input"]
+            },
+        ),
+        types.Tool(
+            name="query_video_task",
+            description=(
+                "查询视频转字幕任务的当前状态和结果。"
+                "返回任务状态: pending(等待中) / processing(处理中，含进度) / completed(已完成，含字幕文本) / failed(失败，含错误信息) / expired(已过期)。"
+                "任务完成后字幕文本直接在结果中返回，无需读取文件。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "submit_video_task 返回的任务 ID"
+                    }
+                },
+                "required": ["task_id"]
             },
         ),
     ]
@@ -519,66 +925,100 @@ async def list_tools() -> list[types.Tool]:
 async def call_tool(
     name: str, arguments: dict[str, Any]
 ) -> list[types.TextContent]:
-    if name != "video_to_subtitle_summary":
+    if name == "submit_video_task":
+        return await _handle_submit(arguments)
+    elif name == "query_video_task":
+        return await _handle_query(arguments)
+    else:
         raise ValueError(f"Unknown tool: {name}")
 
-    if not arguments.get("input"):
-        return [types.TextContent(
-            type="text",
-            text="Error: input parameter is required"
-        )]
+async def _handle_submit(arguments: dict[str, Any]) -> list[types.TextContent]:
+    input_path = arguments.get("input")
+    if not input_path:
+        return [types.TextContent(type="text", text="Error: input 参数是必填项")]
 
+    output_dir = arguments.get("output_dir")
+
+    # Quick validation (fast checks before background task)
     try:
-        input_path = arguments["input"]
-        output_dir = arguments.get("output_dir")
+        mode, platform = detect_input(input_path)
+    except (FileNotFoundError, ValueError) as exc:
+        return [types.TextContent(type="text", text=f"Error: {exc}")]
 
-        result = process_video_to_subtitle_summary(input_path, output_dir)
+    env_map = load_env()
+    tikhub_token = get_env("TIKHUB_TOKEN", env_map=env_map)
 
-        text_content = result["text_content"]
-        video_info = result["video_info"]
-
-        response = f"""## 视频分析结果
-
-### 视频信息
-| 平台 | {video_info.get('platform', 'N/A')} |
-| 标题 | {video_info.get('title', 'N/A')} |
-| 作者 | {video_info.get('author', 'N/A')} |
-| 输出目录 | {result['output_dir']} |
-
-### 字幕文本 (前500字)
-{text_content[:500]}{'…' if len(text_content) > 500 else ''}
-
-### 生成文件
-"""
-        if result['video_path']:
-            response += f"- 视频: {result['video_path']}\n"
-        if result['audio_path']:
-            response += f"- 音频: {result['audio_path']}\n"
-        if result['srt_path']:
-            response += f"- SRT字幕: {result['srt_path']}\n"
-        response += f"- 纯文本: {result['text_path']}\n"
-        response += f"\n结果已保存至: {result['output_dir']}/result.json"
-
+    # Quick dependency check (fast)
+    missing: list[str] = []
+    if mode == "url" and platform in ("bilibili", "youtube"):
+        if not check_dep("yt-dlp"):
+            missing.append("yt-dlp (pip install yt-dlp)")
+    if mode == "url" and platform in ("douyin", "xiaohongshu", "bilibili"):
+        if not tikhub_token:
+            missing.append("TIKHUB_TOKEN (在 .env 中配置)")
+    if mode == "local_video":
+        if not check_dep("ffmpeg"):
+            missing.append("ffmpeg (apt/brew install ffmpeg)")
+    if missing:
         return [types.TextContent(
             type="text",
-            text=response
+            text=f"Error 缺少依赖: {', '.join(missing)}"
         )]
 
-    except Exception as e:
+    # Create task
+    task_id = await task_store.create_task(input_path, output_dir)
+    await task_store.mark_processing(task_id)
+
+    # Launch background processing
+    def _bg():
+        try:
+            process_video_with_progress(input_path, output_dir, task_store, task_id)
+        except Exception as exc:
+            task_store.fail_task(task_id, str(exc))
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _bg)
+
+    return [types.TextContent(
+        type="text",
+        text=(
+            f"✅ 任务已提交\n\n"
+            f"- **task_id**: `{task_id}`\n"
+            f"- **input**: {input_path}\n"
+            f"- **output_dir**: {output_dir or '默认'}\n\n"
+            f"请使用 `query_video_task` 查询进度和结果。\n"
+            f"提示: 任务完成后字幕文本会直接返回，无需读取文件。"
+        )
+    )]
+
+async def _handle_query(arguments: dict[str, Any]) -> list[types.TextContent]:
+    task_id = arguments.get("task_id")
+    if not task_id:
+        return [types.TextContent(type="text", text="Error: task_id 参数是必填项")]
+
+    t = await task_store.get_task(task_id)
+    if t is None:
         return [types.TextContent(
             type="text",
-            text=f"Error processing video: {str(e)}"
+            text=f"Error: 未找到任务 {task_id}，请检查 task_id 是否正确或任务是否已过期。"
         )]
+
+    return [types.TextContent(type="text", text=_format_task_response(t))]
 
 # ── 主函数 ────────────────────────────────────────────────────────────
 
 async def main():
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(
-            read_stream,
-            write_stream,
-            app.create_initialization_options()
-        )
+    # Start background sweeper
+    sweeper = asyncio.create_task(_sweep_loop())
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await app.run(
+                read_stream,
+                write_stream,
+                app.create_initialization_options()
+            )
+    finally:
+        sweeper.cancel()
 
 if __name__ == "__main__":
     asyncio.run(main())

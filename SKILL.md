@@ -3,6 +3,61 @@ name: video-to-subtitle-summary-skill
 description: Use when user provides a short video platform URL (Douyin, Xiaohongshu, Bilibili, YouTube, etc.) or a local video/audio file path and wants to extract subtitles and generate AI summary. Triggers on URLs like v.douyin.com, xhslink.com, xiaohongshu.com, bilibili.com, b23.tv, youtube.com, youtu.be, share links, or local file paths ending in .mp4/.mp3/.wav etc.
 
 Also supports running as an MCP stdio server via: python3 mcp_server.py or uvx github.com/ptbsare/video-to-subtitle-summary-skill
+
+## MCP 异步任务模式
+
+MCP 服务器暴露两个工具（非原来的单一阻塞工具）：
+
+### 1. `submit_video_task` — 提交任务，立即返回 task_id
+
+```json
+{
+  "input": "https://v.douyin.com/xxx",
+  "output_dir": "/tmp/video_analysis/my_video"  // 可选
+}
+```
+
+返回示例：
+```
+✅ 任务已提交
+
+- task_id: abc123def456
+- input: https://v.douyin.com/xxx
+
+请使用 query_video_task 查询进度和结果。
+```
+
+### 2. `query_video_task` — 查询任务状态和结果
+
+```json
+{ "task_id": "abc123def456" }
+```
+
+返回状态：
+- **pending** — 等待处理
+- **processing** — 处理中（含当前阶段和进度百分比）
+- **completed** — 已完成（字幕文本直接返回，无需读文件）
+- **failed** — 失败（含错误信息）
+- **expired** — 已过期（默认 1 小时 TTL，需重新提交）
+
+### 进度阶段
+
+处理过程中会更新以下阶段：
+1. `validating` — 检查依赖
+2. `fetching_info` — 获取视频信息
+3. `downloading` — 下载视频/音频
+4. `extracting_audio` — 提取音频
+5. `transcribing` — ASR 转写
+6. `finalizing` — 生成输出文件
+
+### 典型调用流程
+
+```
+submit_video_task(input="...") → task_id
+query_video_task(task_id) → processing 30% (downloading)
+query_video_task(task_id) → processing 70% (transcribing)
+query_video_task(task_id) → completed (含完整字幕文本)
+```
 ---
 
 # 视频转字幕与 AI 总结
