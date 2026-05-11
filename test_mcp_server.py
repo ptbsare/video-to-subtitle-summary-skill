@@ -159,6 +159,10 @@ async def test_format_response_completed():
     assert "测试视频标题" in text
     assert "字幕文本" in text
     assert "abc123def456" in text
+    assert "输出目录" in text
+    assert "`/tmp/video_analysis/test123`" in text
+    assert "SRT 字幕" in text
+    assert "纯文本" in text
     print(text)
     print("✅ Format completed response passed\n")
 
@@ -272,6 +276,10 @@ async def test_submit_and_query_flow():
         result = await _handle_submit({"input": dummy_path})
         submit_text = result[0].text
         print(f"  Submit:\n{submit_text}")
+
+        # Verify submit response contains task_id (no output_dir in submit response)
+        assert "task_id" in submit_text
+        assert dummy_path in submit_text
 
         # Extract task_id
         m = re.search(r'`([a-f0-9]{12})`', submit_text)

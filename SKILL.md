@@ -12,10 +12,11 @@ MCP 服务器暴露两个工具（非原来的单一阻塞工具）：
 
 ```json
 {
-  "input": "https://v.douyin.com/xxx",
-  "output_dir": "/tmp/video_analysis/my_video"  // 可选
+  "input": "https://v.douyin.com/xxx"
 }
 ```
+
+`output_dir` 可选，默认 `/tmp/video_analysis/<video_id>`。
 
 返回示例：
 ```
@@ -25,6 +26,7 @@ MCP 服务器暴露两个工具（非原来的单一阻塞工具）：
 - input: https://v.douyin.com/xxx
 
 请使用 query_video_task 查询进度和结果。
+提示: 任务完成后字幕文本和输出目录会直接返回，无需读取文件。
 ```
 
 ### 2. `query_video_task` — 查询任务状态和结果

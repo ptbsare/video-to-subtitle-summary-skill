@@ -838,6 +838,7 @@ def _format_task_response(t: TaskRecord) -> str:
         result = t.result
         text_content = result.get("text_content", "")
         video_info = result.get("video_info", {})
+        out_dir = result.get("output_dir", "")
 
         lines += [
             f"",
@@ -849,14 +850,20 @@ def _format_task_response(t: TaskRecord) -> str:
             f"### 字幕文本",
             f"",
             f"```",
-            f"{text_content[:3000]}{'…' if len(text_content) > 3000 else ''}",
+            f"{text_content}",
             f"```",
+            f"",
+            f"### 输出文件",
+            f"- 输出目录: `{out_dir}`",
         ]
         if result.get('srt_path'):
-            lines.append(f"- SRT 字幕: {result['srt_path']}")
+            lines.append(f"- SRT 字幕: `{result['srt_path']}`")
         if result.get('text_path'):
-            lines.append(f"- 纯文本: {result['text_path']}")
-        lines.append(f"- 输出目录: {result.get('output_dir', '')}")
+            lines.append(f"- 纯文本: `{result['text_path']}`")
+        if result.get('video_path'):
+            lines.append(f"- 视频文件: `{result['video_path']}`")
+        if result.get('audio_path'):
+            lines.append(f"- 音频文件: `{result['audio_path']}`")
 
     elif t.status == TaskStatus.FAILED:
         lines += [
@@ -937,7 +944,7 @@ async def _handle_submit(arguments: dict[str, Any]) -> list[types.TextContent]:
     if not input_path:
         return [types.TextContent(type="text", text="Error: input 参数是必填项")]
 
-    output_dir = arguments.get("output_dir")
+    output_dir = arguments.get("output_dir") or None
 
     # Quick validation (fast checks before background task)
     try:
@@ -984,10 +991,9 @@ async def _handle_submit(arguments: dict[str, Any]) -> list[types.TextContent]:
         text=(
             f"✅ 任务已提交\n\n"
             f"- **task_id**: `{task_id}`\n"
-            f"- **input**: {input_path}\n"
-            f"- **output_dir**: {output_dir or '默认'}\n\n"
+            f"- **input**: {input_path}\n\n"
             f"请使用 `query_video_task` 查询进度和结果。\n"
-            f"提示: 任务完成后字幕文本会直接返回，无需读取文件。"
+            f"提示: 任务完成后字幕文本和输出目录会直接返回，无需读取文件。"
         )
     )]
 
