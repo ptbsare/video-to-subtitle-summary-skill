@@ -542,7 +542,7 @@ def _download_sherpa_model(task_id_str: str, task_store: "TaskStore") -> None:
         subprocess.run(
             ["wget", "-q", "--show-progress", "--progress=dot:giga",
              "-O", str(archive), _MODEL_URL],
-            check=True, capture_output=False, timeout=300)
+            check=True, capture_output=False, timeout=1800)
     except FileNotFoundError:
         import urllib.request
         last_pct = [0]
@@ -555,12 +555,13 @@ def _download_sherpa_model(task_id_str: str, task_store: "TaskStore") -> None:
                     last_pct[0] = pct
         urllib.request.urlretrieve(_MODEL_URL, str(archive), reporthook=_hook)
     except subprocess.TimeoutExpired:
-        raise RuntimeError("模型下载超时 (>300s)，请检查网络")
+        raise RuntimeError("模型下载超时 (>30min)，请检查网络")
     elapsed = time.time() - t0
     task_store.update_progress(task_id_str, "downloading_model",
         f"下载完成 ({elapsed:.0f}s)，解压中...")
     subprocess.run(["tar", "xf", str(archive), "-C", str(_MODEL_DIR)],
-        check=True, capture_output=True, timeout=120)
+        check=True, capture_output=True, timeout=600)
+    archive.unlink()
     # 只保留必要文件
     kept = {"model.int8.onnx", "tokens.txt"}
     for f in _MODEL_DIR.iterdir():
