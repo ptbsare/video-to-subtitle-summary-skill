@@ -1042,17 +1042,20 @@ async def _handle_submit(arguments: dict[str, Any]) -> list[types.TextContent]:
 
     # Create task
     task_id = await task_store.create_task(input_path, output_dir)
-    await task_store.mark_processing(task_id)
 
-    # Launch background processing
-    def _bg():
+    # Launch background processing — do NOT await, return task_id immediately
+    async def _run():
+        await task_store.mark_processing(task_id)
+        loop = asyncio.get_running_loop()
         try:
-            process_video_with_progress(input_path, output_dir, task_store, task_id)
+            await loop.run_in_executor(
+                None, process_video_with_progress,
+                input_path, output_dir, task_store, task_id,
+            )
         except Exception as exc:
             task_store.fail_task(task_id, str(exc))
 
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _bg)
+    asyncio.create_task(_run())
 
     return [types.TextContent(
         type="text",
