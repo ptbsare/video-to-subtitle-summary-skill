@@ -512,13 +512,61 @@ def process_video_to_subtitle_summary(input_path: str, output_dir: str = None) -
 
 # Pipeline stages for progress reporting
 _STAGES = [
-    "validating",       # 检查依赖 & 输入
-    "fetching_info",    # 获取视频信息 (TikHub)
-    "downloading",      # 下载视频/音频
-    "extracting_audio", # 提取音频 (ffmpeg)
-    "transcribing",     # ASR 转写
-    "finalizing",       # 生成输出文件
+    "validating",          # 检查依赖 & 输入
+    "downloading_model",   # 下载 ASR 模型（如不存在）
+    "fetching_info",       # 获取视频信息 (TikHub)
+    "downloading",         # 下载视频/音频
+    "extracting_audio",    # 提取音频 (ffmpeg)
+    "transcribing",        # ASR 转写
+    "finalizing",          # 生成输出文件
 ]
+
+# ── 模型下载 ──────────────────────────────────────────────────────────
+
+_MODEL_DIR = SKILL_DIR / "sherpa-onnx-paraformer-trilingual-zh-cantonese-en"
+_MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-trilingual-zh-cantonese-en.tar.bz2"
+
+def _download_sherpa_model(task_id_str: str, task_store: "TaskStore") -> None:
+    """Download sherpa-onnx model if missing. Progress is reported via task_store."""
+    model_file = _MODEL_DIR / "model.int8.onnx"
+    if model_file.exists():
+        return
+    task_store.update_progress(task_id_str, "downloading_model", "模型不存在，开始下载 (~234MB)...")
+    _MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    archive = _MODEL_DIR / "model.tar.bz2"
+    t0 = time.time()
+    # 优先用 wget（有进度），否则用 urllib
+    try:
+        subprocess.run(
+            ["wget", "-q", "--show-progress", "--progress=dot:giga",
+             "-O", str(archive), _MODEL_URL],
+            check=True, capture_output=False, timeout=600)
+    except FileNotFoundError:
+        import urllib.request
+        last_pct = [0]
+        def _hook(block_num, block_size, total_size):
+            if total_size > 0 and block_num % 50 == 0:
+                pct = min(int(block_num * block_size / total_size * 100), 100)
+                if pct - last_pct[0] >= 10:
+                    task_store.update_progress(task_id_str, "downloading_model",
+                        f"下载模型 {pct}% ({block_num * block_size // 1024 // 1024}MB / {total_size // 1024 // 1024}MB)")
+                    last_pct[0] = pct
+        urllib.request.urlretrieve(_MODEL_URL, str(archive), reporthook=_hook)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("模型下载超时 (>600s)，请检查网络")
+    elapsed = time.time() - t0
+    task_store.update_progress(task_id_str, "downloading_model",
+        f"下载完成 ({elapsed:.0f}s)，解压中...")
+    subprocess.run(["tar", "xf", str(archive), "-C", str(_MODEL_DIR)],
+        check=True, capture_output=True, timeout=300)
+    # 只保留必要文件
+    kept = {"model.int8.onnx", "tokens.txt"}
+    for f in _MODEL_DIR.iterdir():
+        if f.is_file() and f.name not in kept:
+            f.unlink()
+        elif f.is_dir():
+            shutil.rmtree(f)
+    task_store.update_progress(task_id_str, "downloading_model", "模型准备完成")
 
 def process_video_with_progress(input_path: str, output_dir: str, task_store: "TaskStore", task_id: str) -> None:
     """Run the full pipeline while updating task progress, then store the result."""
@@ -557,6 +605,11 @@ def process_video_with_progress(input_path: str, output_dir: str, task_store: "T
 
         if missing:
             raise RuntimeError(f"缺少依赖: {', '.join(missing)}")
+
+        # ── Stage: downloading_model ──
+        # 提前下载 ASR 模型，避免卡在 transcribing 阶段
+        if asr_backend == "sherpa-onnx":
+            _download_sherpa_model(task_id, task_store)
 
         video_info: dict = {}
         video_path: Path | None = None

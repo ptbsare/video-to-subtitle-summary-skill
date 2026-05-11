@@ -46,11 +46,12 @@ MCP 服务器暴露两个工具（非原来的单一阻塞工具）：
 
 处理过程中会更新以下阶段：
 1. `validating` — 检查依赖
-2. `fetching_info` — 获取视频信息
-3. `downloading` — 下载视频/音频
-4. `extracting_audio` — 提取音频
-5. `transcribing` — ASR 转写
-6. `finalizing` — 生成输出文件
+2. `downloading_model` — 下载 ASR 模型（首次运行，~234MB）
+3. `fetching_info` — 获取视频信息
+4. `downloading` — 下载视频/音频
+5. `extracting_audio` — 提取音频
+6. `transcribing` — ASR 转写
+7. `finalizing` — 生成输出文件
 
 ### 典型调用流程
 

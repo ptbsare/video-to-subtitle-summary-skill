@@ -313,7 +313,7 @@ async def test_stages_count():
     print("=" * 60)
     print("Test 12: Pipeline stages")
 
-    expected = ["validating", "fetching_info", "downloading", "extracting_audio", "transcribing", "finalizing"]
+    expected = ["validating", "downloading_model", "fetching_info", "downloading", "extracting_audio", "transcribing", "finalizing"]
     assert _STAGES == expected, f"Expected {expected}, got {_STAGES}"
     print(f"  Stages: {_STAGES}")
     print("✅ Stages verified\n")
