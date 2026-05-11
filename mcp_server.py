@@ -294,31 +294,93 @@ def extract_audio(video_path: Path, audio_path: Path) -> None:
 # ── 步骤 4: ASR 转写 ──────────────────────────────────────────────────
 
 def transcribe_sherpa_onnx(audio_path: Path, output_dir: Path, env_map: dict) -> dict:
-    script = SKILL_DIR / "scripts" / "transcribe_sherpa_onnx.py"
-    if not script.exists():
-        script = SKILL_DIR / "transcribe_sherpa_onnx.py"
-    if not script.exists():
-        raise RuntimeError("sherpa-onnx 转写脚本不存在")
+    """直接用 sherpa_onnx Python API 转写，不依赖外部脚本"""
+    import sherpa_onnx
+    import wave
 
-    cmd = [
-        sys.executable, str(script), str(audio_path),
-        "--output-dir", str(output_dir),
-        "--model-dir", str(_MODEL_DIR),
-        "--model-fp", "model.int8.onnx", "--chunk-seconds", "30",
-    ]
-    env = os.environ.copy()
-    env["OMP_NUM_THREADS"] = str(min(os.cpu_count() or 4, 16))
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600, env=env)
-    except subprocess.CalledProcessError as exc:
-        stderr = exc.stderr.strip()[:500] if exc.stderr else ""
-        raise RuntimeError(f"sherpa-onnx 转写失败:\n{stderr}")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("sherpa-onnx 转写超时 (>600s)")
-    result_json = output_dir / "result.json"
-    if result_json.exists():
-        return json.loads(result_json.read_text(encoding="utf-8"))
-    return {}
+    model_path = _MODEL_DIR / "model.int8.onnx"
+    tokens_path = _MODEL_DIR / "tokens.txt"
+    if not model_path.exists():
+        raise FileNotFoundError(f"模型文件不存在: {model_path}")
+    if not tokens_path.exists():
+        raise FileNotFoundError(f"tokens.txt 不存在: {tokens_path}")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    wav_path = output_dir / "audio_16k.wav"
+
+    # 提取/转换音频为 16kHz mono WAV
+    ext = audio_path.suffix.lower()
+    if ext != ".wav":
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(audio_path),
+             "-vn", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000", str(wav_path)],
+            check=True, capture_output=True, timeout=600)
+    else:
+        # 检查 WAV 格式是否已经是 16kHz mono 16-bit
+        try:
+            with wave.open(str(audio_path)) as wf:
+                if wf.getframerate() == 16000 and wf.getsampwidth() == 2 and wf.getnchannels() == 1:
+                    wav_path = audio_path
+                else:
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-i", str(audio_path),
+                         "-vn", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000", str(wav_path)],
+                        check=True, capture_output=True, timeout=300)
+        except Exception:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", str(audio_path),
+                 "-vn", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000", str(wav_path)],
+                check=True, capture_output=True, timeout=300)
+
+    # 加载模型
+    num_threads = min(os.cpu_count() or 4, 16)
+    recognizer = sherpa_onnx.OfflineRecognizer.from_paraformer(
+        paraformer=str(model_path), tokens=str(tokens_path),
+        num_threads=num_threads, sample_rate=16000, feature_dim=80,
+        decoding_method="greedy_search", debug=False, provider="cpu")
+
+    # 读取音频并转写
+    with wave.open(str(wav_path)) as wf:
+        samples = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
+        sample_rate = wf.getframerate()
+
+    duration = len(samples) / sample_rate
+    chunk_seconds = 30.0
+    chunk_samples = int(chunk_seconds * sample_rate)
+    segments = []
+    offset = 0.0
+
+    for start in range(0, len(samples), chunk_samples):
+        end = min(start + chunk_samples, len(samples))
+        chunk = samples[start:end]
+        s = recognizer.create_stream()
+        s.accept_waveform(sample_rate, chunk)
+        recognizer.decode_stream(s)
+        text = s.result.text.strip()
+        if text:
+            seg_dur = len(chunk) / sample_rate
+            segments.append({"text": text, "start": round(offset, 3), "end": round(offset + seg_dur, 3)})
+        offset += len(chunk) / sample_rate
+
+    # 写输出文件
+    text_content = " ".join(seg["text"] for seg in segments)
+    text_path = output_dir / "text.txt"
+    text_path.write_text(text_content + "\n", encoding="utf-8")
+
+    srt_lines = []
+    for i, seg in enumerate(segments, 1):
+        def _srt_time(sec):
+            h = int(sec // 3600)
+            m = int((sec % 3600) // 60)
+            s = int(sec % 60)
+            ms = int((sec % 1) * 1000)
+            return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+        srt_lines.append(f"{i}\n{_srt_time(seg['start'])} --> {_srt_time(seg['end'])}\n{seg['text']}\n")
+    srt_path = output_dir / "subtitle.srt"
+    srt_path.write_text("\n".join(srt_lines), encoding="utf-8")
+
+    return {"srt_path": str(srt_path), "text_path": str(text_path),
+            "segments": len(segments), "text": text_content, "duration": round(duration, 2)}
 
 def transcribe_volcengine(audio_path: Path, output_dir: Path, env_map: dict) -> dict:
     token = get_env("BYTEDANCE_VC_TOKEN", env_map=env_map)
