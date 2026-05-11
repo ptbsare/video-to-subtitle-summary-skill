@@ -89,7 +89,7 @@ def run(cmd: list[str], check: bool = True, capture: bool = False, timeout: int 
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"命令超时 (> {timeout}s): {' '.join(cmd)}")
     except subprocess.CalledProcessError as exc:
-        stderr = exc.stderr.strip()[:500] if exc.stderr else ""
+        stderr = exc.stderr.strip()[:2000] if exc.stderr else ""
         raise RuntimeError(f"命令失败: {' '.join(cmd)}\n{stderr}") from exc
     except FileNotFoundError:
         raise RuntimeError(f"命令未找到: {cmd[0]}")
@@ -735,7 +735,13 @@ def process_video_with_progress(input_path: str, output_dir: str, task_store: "T
                 else:
                     set_stage("downloading", "下载 YouTube 音频")
                     audio_path = output_dir_path / "audio.mp3"
-                    _ytdlp_download_audio(input_path, audio_path)
+                    try:
+                        _ytdlp_download_audio(input_path, audio_path)
+                    except Exception as ytdlp_err:
+                        raise RuntimeError(
+                            f"YouTube 下载失败（字幕和音频均不可用）: {ytdlp_err}\n"
+                            f"可能原因: Cookie 过期或无效。请更新 YTDLP_COOKIE_FILE 指向有效的 YouTube cookies.txt"
+                        )
             elif platform == "douyin":
                 set_stage("downloading", "下载抖音视频")
                 video_path = output_dir_path / "video.mp4"
