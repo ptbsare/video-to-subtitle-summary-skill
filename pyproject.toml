@@ -15,11 +15,11 @@ dependencies = [
 ]
 
 [project.scripts]
-video-to-subtitle-summary-skill = "mcp_server:main"
+video-to-subtitle-summary-skill = "run_mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["mcp_server"]
+py-modules = ["run_mcp_server", "mcp_server"]

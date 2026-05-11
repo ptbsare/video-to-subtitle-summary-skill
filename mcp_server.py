@@ -291,10 +291,17 @@ def extract_audio(video_path: Path, audio_path: Path) -> None:
         stderr = exc.stderr.decode("utf-8", errors="replace")[:500] if exc.stderr else ""
         raise RuntimeError(f"ffmpeg 提取音频失败:\n{stderr}")
 
-# ── 步骤 4: ASR 转写 ──────────────────────────────────────────────────
+# ── 步骤 4: ASR 转写（内联实现，不依赖外部脚本）──────────────────
+
+def _srt_time(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds % 1) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
 
 def transcribe_sherpa_onnx(audio_path: Path, output_dir: Path, env_map: dict) -> dict:
-    """直接用 sherpa_onnx Python API 转写，不依赖外部脚本"""
     import sherpa_onnx
     import wave
 
@@ -308,7 +315,7 @@ def transcribe_sherpa_onnx(audio_path: Path, output_dir: Path, env_map: dict) ->
     output_dir.mkdir(parents=True, exist_ok=True)
     wav_path = output_dir / "audio_16k.wav"
 
-    # 提取/转换音频为 16kHz mono WAV
+    # 提取/转换为 16kHz mono 16-bit WAV
     ext = audio_path.suffix.lower()
     if ext != ".wav":
         subprocess.run(
@@ -316,7 +323,6 @@ def transcribe_sherpa_onnx(audio_path: Path, output_dir: Path, env_map: dict) ->
              "-vn", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000", str(wav_path)],
             check=True, capture_output=True, timeout=600)
     else:
-        # 检查 WAV 格式是否已经是 16kHz mono 16-bit
         try:
             with wave.open(str(audio_path)) as wf:
                 if wf.getframerate() == 16000 and wf.getsampwidth() == 2 and wf.getnchannels() == 1:
@@ -339,48 +345,59 @@ def transcribe_sherpa_onnx(audio_path: Path, output_dir: Path, env_map: dict) ->
         num_threads=num_threads, sample_rate=16000, feature_dim=80,
         decoding_method="greedy_search", debug=False, provider="cpu")
 
-    # 读取音频并转写
+    # 读取 WAV
     with wave.open(str(wav_path)) as wf:
-        samples = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
+        n = wf.getnframes()
+        raw = wf.readframes(n)
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
         sample_rate = wf.getframerate()
 
     duration = len(samples) / sample_rate
-    chunk_seconds = 30.0
-    chunk_samples = int(chunk_seconds * sample_rate)
-    segments = []
-    offset = 0.0
 
-    for start in range(0, len(samples), chunk_samples):
-        end = min(start + chunk_samples, len(samples))
-        chunk = samples[start:end]
+    # 短音频直接转写，长音频分段
+    CHUNK_SECONDS = 30.0
+    chunk_samples = int(CHUNK_SECONDS * sample_rate)
+    segments = []
+
+    if len(samples) <= chunk_samples:
         s = recognizer.create_stream()
-        s.accept_waveform(sample_rate, chunk)
+        s.accept_waveform(sample_rate, samples)
         recognizer.decode_stream(s)
         text = s.result.text.strip()
         if text:
-            seg_dur = len(chunk) / sample_rate
-            segments.append({"text": text, "start": round(offset, 3), "end": round(offset + seg_dur, 3)})
-        offset += len(chunk) / sample_rate
+            segments.append({"text": text, "start": 0.0, "end": round(duration, 3)})
+    else:
+        offset = 0.0
+        total_chunks = max(1, int(np.ceil(len(samples) / chunk_samples)))
+        for idx, start in enumerate(range(0, len(samples), chunk_samples)):
+            end = min(start + chunk_samples, len(samples))
+            chunk = samples[start:end]
+            chunk_dur = len(chunk) / sample_rate
+            s = recognizer.create_stream()
+            s.accept_waveform(sample_rate, chunk)
+            recognizer.decode_stream(s)
+            text = s.result.text.strip()
+            if text:
+                segments.append({"text": text, "start": round(offset, 3), "end": round(offset + chunk_dur, 3)})
+            offset += chunk_dur
 
     # 写输出文件
-    text_content = " ".join(seg["text"] for seg in segments)
+    srt_path = output_dir / "subtitle.srt"
     text_path = output_dir / "text.txt"
-    text_path.write_text(text_content + "\n", encoding="utf-8")
-
     srt_lines = []
     for i, seg in enumerate(segments, 1):
-        def _srt_time(sec):
-            h = int(sec // 3600)
-            m = int((sec % 3600) // 60)
-            s = int(sec % 60)
-            ms = int((sec % 1) * 1000)
-            return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-        srt_lines.append(f"{i}\n{_srt_time(seg['start'])} --> {_srt_time(seg['end'])}\n{seg['text']}\n")
-    srt_path = output_dir / "subtitle.srt"
+        s = _srt_time(seg["start"])
+        e = _srt_time(seg["end"])
+        srt_lines.append(f"{i}\n{s} --> {e}\n{seg['text']}\n")
     srt_path.write_text("\n".join(srt_lines), encoding="utf-8")
+    text_path.write_text(" ".join(seg["text"] for seg in segments) + "\n", encoding="utf-8")
 
-    return {"srt_path": str(srt_path), "text_path": str(text_path),
-            "segments": len(segments), "text": text_content, "duration": round(duration, 2)}
+    return {
+        "srt_path": str(srt_path),
+        "text_path": str(text_path),
+        "segments": len(segments),
+        "text": " ".join(seg["text"] for seg in segments),
+    }
 
 def transcribe_volcengine(audio_path: Path, output_dir: Path, env_map: dict) -> dict:
     token = get_env("BYTEDANCE_VC_TOKEN", env_map=env_map)
