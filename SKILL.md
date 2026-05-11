@@ -113,6 +113,8 @@ ASR_BACKEND=sherpa-onnx
 TIKHUB_TOKEN=xxx           # TikHub API Token（抖音/小红书/B站）
 YTDLP_COOKIE_FILE=xxx      # YouTube Cookie 文件路径
 YTDLP_COOKIES=xxx          # YouTube Cookie 字符串
+YTDLP_WORKERS=4            # yt-dlp 并发线程数
+MODEL_CACHE_DIR=xxx         # 模型缓存目录（默认 ~/.cache/video-to-subtitle-summary）
 BYTEDANCE_VC_TOKEN=xxx     # 火山引擎（可选）
 BYTEDANCE_VC_APPID=xxx     # 火山引擎（可选）
 ```

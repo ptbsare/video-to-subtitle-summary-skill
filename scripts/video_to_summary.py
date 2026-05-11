@@ -46,6 +46,9 @@ ENV_FILE = SKILL_DIR / ".env"
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma"}
 DEFAULT_OUTPUT_BASE = Path("/tmp/video_analysis")
+# 模型缓存到固定位置，避免 uvx 每次随机路径重新下载
+CACHE_ROOT = Path(os.getenv("MODEL_CACHE_DIR", Path.home() / ".cache" / "video-to-subtitle-summary"))
+MODEL_DIR = CACHE_ROOT / "model"
 YOUTUBE_LANGUAGES = ("zh-Hans", "zh-Hant", "zh", "en")
 
 # ── .env 加载 ─────────────────────────────────────────────────────────
@@ -330,7 +333,7 @@ def transcribe_sherpa_onnx(audio_path: Path, output_dir: Path, env_map: dict) ->
     cmd = [
         sys.executable, str(script), str(audio_path),
         "--output-dir", str(output_dir),
-        "--model-dir", str(SKILL_DIR / "sherpa-onnx-paraformer-trilingual-zh-cantonese-en"),
+        "--model-dir", str(MODEL_DIR),
         "--model-fp", "model.int8.onnx", "--chunk-seconds", "30",
     ]
     env = os.environ.copy()

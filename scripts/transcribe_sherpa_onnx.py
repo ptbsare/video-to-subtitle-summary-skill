@@ -42,7 +42,9 @@ import numpy as np
 # ── 常量 ──────────────────────────────────────────────────────────────
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_MODEL_DIR = SKILL_DIR / "sherpa-onnx-paraformer-trilingual-zh-cantonese-en"
+# 模型缓存到固定位置，避免 uvx 每次随机路径重新下载
+CACHE_ROOT = Path(os.getenv("MODEL_CACHE_DIR", Path.home() / ".cache" / "video-to-subtitle-summary"))
+DEFAULT_MODEL_DIR = CACHE_ROOT / "model"
 MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-trilingual-zh-cantonese-en.tar.bz2"
 
 AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".wma"}

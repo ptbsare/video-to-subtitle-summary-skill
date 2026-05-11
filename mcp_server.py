@@ -303,7 +303,7 @@ def transcribe_sherpa_onnx(audio_path: Path, output_dir: Path, env_map: dict) ->
     cmd = [
         sys.executable, str(script), str(audio_path),
         "--output-dir", str(output_dir),
-        "--model-dir", str(SKILL_DIR / "sherpa-onnx-paraformer-trilingual-zh-cantonese-en"),
+        "--model-dir", str(_MODEL_DIR),
         "--model-fp", "model.int8.onnx", "--chunk-seconds", "30",
     ]
     env = os.environ.copy()
@@ -521,9 +521,10 @@ _STAGES = [
     "finalizing",          # 生成输出文件
 ]
 
-# ── 模型下载 ──────────────────────────────────────────────────────────
-
-_MODEL_DIR = SKILL_DIR / "sherpa-onnx-paraformer-trilingual-zh-cantonese-en"
+# ── 模型缓存 ──────────────────────────────────────────────────────────
+# 模型缓存到固定位置，避免 uvx 每次随机路径重新下载
+_CACHE_ROOT = Path(os.getenv("MODEL_CACHE_DIR", Path.home() / ".cache" / "video-to-subtitle-summary"))
+_MODEL_DIR = _CACHE_ROOT / "model"
 _MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-trilingual-zh-cantonese-en.tar.bz2"
 
 def _download_sherpa_model(task_id_str: str, task_store: "TaskStore") -> None:
@@ -531,7 +532,8 @@ def _download_sherpa_model(task_id_str: str, task_store: "TaskStore") -> None:
     model_file = _MODEL_DIR / "model.int8.onnx"
     if model_file.exists():
         return
-    task_store.update_progress(task_id_str, "downloading_model", "模型不存在，开始下载 (~234MB)...")
+    task_store.update_progress(task_id_str, "downloading_model",
+        f"模型不存在，开始下载 (~234MB)... 缓存位置: {_MODEL_DIR}")
     _MODEL_DIR.mkdir(parents=True, exist_ok=True)
     archive = _MODEL_DIR / "model.tar.bz2"
     t0 = time.time()
@@ -540,7 +542,7 @@ def _download_sherpa_model(task_id_str: str, task_store: "TaskStore") -> None:
         subprocess.run(
             ["wget", "-q", "--show-progress", "--progress=dot:giga",
              "-O", str(archive), _MODEL_URL],
-            check=True, capture_output=False, timeout=600)
+            check=True, capture_output=False, timeout=300)
     except FileNotFoundError:
         import urllib.request
         last_pct = [0]
@@ -553,12 +555,12 @@ def _download_sherpa_model(task_id_str: str, task_store: "TaskStore") -> None:
                     last_pct[0] = pct
         urllib.request.urlretrieve(_MODEL_URL, str(archive), reporthook=_hook)
     except subprocess.TimeoutExpired:
-        raise RuntimeError("模型下载超时 (>600s)，请检查网络")
+        raise RuntimeError("模型下载超时 (>300s)，请检查网络")
     elapsed = time.time() - t0
     task_store.update_progress(task_id_str, "downloading_model",
         f"下载完成 ({elapsed:.0f}s)，解压中...")
     subprocess.run(["tar", "xf", str(archive), "-C", str(_MODEL_DIR)],
-        check=True, capture_output=True, timeout=300)
+        check=True, capture_output=True, timeout=120)
     # 只保留必要文件
     kept = {"model.int8.onnx", "tokens.txt"}
     for f in _MODEL_DIR.iterdir():

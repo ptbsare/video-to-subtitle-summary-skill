@@ -234,6 +234,7 @@ brew install ffmpeg
 | `YTDLP_COOKIE_FILE` | — | YouTube Cookie 文件路径（Netscape 格式），见下方详细说明 |
 | `YTDLP_COOKIES` | — | YouTube Cookie 字符串（`key1=val1; key2=val2` 格式），优先级最低 |
 | `YTDLP_WORKERS` | `4` | yt-dlp 并发下载线程数 |
+| `MODEL_CACHE_DIR` | `~/.cache/video-to-subtitle-summary` | ASR 模型缓存目录，模型缓存在 `$MODEL_CACHE_DIR/model/` 下。通过 uvx 运行时自动使用固定缓存路径，避免每次重新下载 |
 
 ### .env 文件示例
 
