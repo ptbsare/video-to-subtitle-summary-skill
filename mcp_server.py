@@ -934,7 +934,20 @@ def _format_task_response(t: TaskRecord) -> str:
 
 # ── MCP 服务器实现 ──────────────────────────────────────────────────
 
-app = Server("video-to-subtitle-summary-skill")
+app = Server(
+    "video-to-subtitle-summary-skill",
+    instructions=(
+        "视频转字幕 MCP 服务器。提供两个工具：\n"
+        "1. submit_video_task — 提交视频转字幕任务，立即返回 task_id。"
+        "   参数 input（必填）: 视频 URL 或本地文件路径。"
+        "   参数 output_dir（可选）: 输出目录，默认 /tmp/video_analysis/<video_id>。\n"
+        "2. query_video_task — 查询任务状态和结果。"
+        "   参数 task_id（必填）: submit_video_task 返回的任务 ID。\n"
+        "   返回: pending/processing/completed/failed/expired 状态。"
+        "   completed 时字幕文本和输出文件路径直接返回，无需读取文件。\n"
+        "支持平台: 抖音、小红书、B站、YouTube 及 yt-dlp 兼容的 200+ 平台。"
+    ),
+)
 
 @app.list_tools()
 async def list_tools() -> list[types.Tool]:
@@ -942,20 +955,21 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="submit_video_task",
             description=(
-                "提交一个视频转字幕任务，立即返回 task_id。"
-                "支持抖音、小红书、B站、YouTube 等平台的 URL 或本地视频/音频文件路径。"
-                "使用 query_video_task 轮询任务进度和结果。"
+                "提交视频转字幕任务，立即返回 task_id。\n"
+                "参数 input: 视频 URL（抖音/小红书/B站/YouTube 等）或本地文件路径（.mp4/.mp3/.wav 等）。\n"
+                "参数 output_dir: 可选，输出目录，默认 /tmp/video_analysis/<video_id>。\n"
+                "提交后用 query_video_task 轮询结果。"
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "input": {
                         "type": "string",
-                        "description": "视频 URL 或本地文件路径。支持平台: douyin.com, xiaohongshu.com, bilibili.com, youtube.com, 或本地视频/音频文件 (.mp4, .mp3, .wav 等)"
+                        "description": "视频 URL 或本地文件路径"
                     },
                     "output_dir": {
                         "type": "string",
-                        "description": "可选输出目录。默认: /tmp/video_analysis/<video_id>"
+                        "description": "可选输出目录，默认 /tmp/video_analysis/<video_id>"
                     }
                 },
                 "required": ["input"]
@@ -964,9 +978,10 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="query_video_task",
             description=(
-                "查询视频转字幕任务的当前状态和结果。"
-                "返回任务状态: pending(等待中) / processing(处理中，含进度) / completed(已完成，含字幕文本) / failed(失败，含错误信息) / expired(已过期)。"
-                "任务完成后字幕文本直接在结果中返回，无需读取文件。"
+                "查询视频转字幕任务状态和结果。\n"
+                "参数 task_id: submit_video_task 返回的任务 ID。\n"
+                "返回状态: pending（等待）/ processing（处理中，含阶段和进度百分比）/ "
+                "completed（完成，字幕文本和输出目录直接返回）/ failed（失败，含错误信息）/ expired（过期）。"
             ),
             inputSchema={
                 "type": "object",
